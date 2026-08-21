@@ -13,7 +13,7 @@ from . import AlignSequenceOfMultiDimensionalData
 from . import MultiDimensionalProcessing
 from . import IESquarePlot
 from . import FindLocalMaxima
-
+from . import ExperimentalAxesPlotter
 
 _computation_classes = [
     DoubleGaussian.DoubleGaussian,
