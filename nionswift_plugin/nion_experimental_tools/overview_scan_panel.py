@@ -63,6 +63,8 @@ class SamplePanelHandler(Declarative.Handler):
         self.progress_min: int = 0
         self.progress_text: str = "Progress:\nIdle"
         self._acq_task: typing.Optional[asyncio.Task[None]] = None
+        self._cancel_requested: bool = False
+        self._is_running: bool = False
         self.ui_view = self._build_ui()
 
     def _set_progress(self, value: int, maximum: int, text: str) -> None:
@@ -109,6 +111,9 @@ class SamplePanelHandler(Declarative.Handler):
             maximum=100,
             width=500
         )
+        cancel_button = u.create_push_button(
+            text="Cancel acquisition",
+            on_clicked="on_cancel_acquisition_clicked")
 
 
         return u.create_column(
@@ -128,6 +133,8 @@ class SamplePanelHandler(Declarative.Handler):
             u.create_spacing(50),
             progress_label,
             progress_bar,
+            u.create_spacing(8),
+            cancel_button,
             u.create_stretch(),
             width=500,
             height=500
@@ -139,6 +146,12 @@ class SamplePanelHandler(Declarative.Handler):
 
     def _append_output_threadsafe(self, message: str) -> None:
         self._event_loop.call_soon_threadsafe(self._append_output, message)
+
+    def on_cancel_acquisition_clicked(self, widget: typing.Any) -> None:
+        if self._is_running:
+            self._cancel_requested = True
+            self._set_progress_threadsafe(self.progress_value, 100, "Cancel requested...")
+
 
     def find_matrix(self, ds: float = 16e-6) -> numpy.ndarray:
         instrument = self.instrument
@@ -183,6 +196,8 @@ class SamplePanelHandler(Declarative.Handler):
                     reduce: float = 1.0):
 
         counter = 0
+        self._cancel_requested = False
+        self._is_running = True
 
         try:
             tv_pixel_angle_rad = instrument.get_control_output("TVPixelAngle")
@@ -248,19 +263,26 @@ class SamplePanelHandler(Declarative.Handler):
         t1 = time.time()
 
         if timer:
-            size = (1,1)
+            size = (2,1)
         else:
             size = size
         try:
             for row in range(size[0]):
+                if self._cancel_requested:
+                    self._append_output_threadsafe("Acquisition Cancelled.")
+                    return None if not timer else (0, 0.0)
+
                 col_iter = range(size[1]) if (row % 2 == 0) else range(size[1] - 1, -1, -1)
                 for column in col_iter:
+                    if self._cancel_requested:
+                        self._append_output_threadsafe("Acquisition Cancelled.")
+                        return None if not timer else (0, 0.0)
 
                     if shift_x_control_name == "stage_position_m.x":
                         delta_x_m = - sub_area_shift_m * (column - size[1] // 2)
                         delta_y_m = - sub_area_shift_m * (row - size[0] // 2)
                     else:
-                        matrix = self.find_matrix(instrument)
+                        matrix = self.find_matrix()
                         delta_x_m = - sub_area_shift_m * (column - size[1] // 2)
                         delta_y_m = - sub_area_shift_m * (row - size[0] // 2)
                         delta_camera = numpy.array([delta_x_m, delta_y_m], dtype=numpy.float64)
@@ -273,6 +295,9 @@ class SamplePanelHandler(Declarative.Handler):
 
                     attempts = 0
                     while attempts < 4:
+                        if self._cancel_requested:
+                            self._append_output_threadsafe("Acquisition Cancelled.")
+                            return None if not timer else (0, 0.0)
                         attempts += 1
                         try:
                             tolerance_factor = 0.0001
@@ -288,6 +313,9 @@ class SamplePanelHandler(Declarative.Handler):
                     # set both values
                     attempts = 0
                     while attempts < 4:
+                        if self._cancel_requested:
+                            self._append_output_threadsafe("Acquisition Cancelled.")
+                            return None if not timer else (0, 0.0)
                         attempts += 1
                         try:
                             tolerance_factor = 0.0001
@@ -315,6 +343,7 @@ class SamplePanelHandler(Declarative.Handler):
             instrument.set_control_output(shift_x_control_name, sx_m)
             instrument.set_control_output(shift_y_control_name, sy_m)
             instrument.set_control_output("C10", df_original)
+            self._set_progress_threadsafe(0, 100, "Progress:\n Idle")
 
         if timer:
             return total_images, time_total
@@ -347,7 +376,7 @@ class SamplePanelHandler(Declarative.Handler):
         target_width_m = (width_um, height_um)
         total_images, t_total = self.acquisition(instrument, camera, defocus_nm, target_width_m, timer=True, reduce=reduce)
 
-        time_taken = t_total * total_images
+        time_taken = t_total * total_images / 2 #average time to move the stage
         self._append_output(
             f"This acquisition will take approximately {(time_taken // 3600):.0f}h {((time_taken % 3600) / 60):.0f}min {(time_taken % 60):.0f}s"
         )
@@ -366,6 +395,9 @@ class SamplePanelHandler(Declarative.Handler):
                 None,
                 lambda: self.acquisition(instrument, camera, defocus_nm, target_width_um, False, 1.0),
             )
+            if master_data is None:
+                self._set_progress(0, 100, "Progress:\nIdle")
+                return
         except Exception as e:
             self._append_output(f"Acquisition failed: {e!r}")
             return
