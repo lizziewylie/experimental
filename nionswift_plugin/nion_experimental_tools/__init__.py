@@ -13,6 +13,7 @@ from . import AlignSequenceOfMultiDimensionalData
 from . import MultiDimensionalProcessing
 from . import IESquarePlot
 from . import FindLocalMaxima
+from . import overview_scan_panel
 
 
 _computation_classes = [
