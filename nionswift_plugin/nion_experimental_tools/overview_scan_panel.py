@@ -274,6 +274,7 @@ class SamplePanelHandler(Declarative.Handler):
             size = (2,1)
         else:
             size = size
+
         try:
             for row in range(size[0]):
                 if self._cancel_requested:
@@ -358,9 +359,11 @@ class SamplePanelHandler(Declarative.Handler):
             self._set_progress_threadsafe(0, 100, "Progress:\n Idle")
 
         if timer:
+            self.cancel_enabled.value = False
             return total_images, time_total
         else:
-            return master_data
+            self.cancel_enabled.value = False
+            return master_data, sub_area, sub_area_shift_m, pixel_size_m
 
 
     def on_estimate_time_clicked(self, widget: typing.Any) -> None:
@@ -402,8 +405,9 @@ class SamplePanelHandler(Declarative.Handler):
     ) -> None:
         loop = self._event_loop
 
+        self._append_output_threadsafe("Starting acquisition...\n")
         try:
-            master_data = await loop.run_in_executor(
+            master_data, sub_area, sub_area_shift_m, pixel_size_m = await loop.run_in_executor(
                 None,
                 lambda: self.acquisition(instrument, camera, defocus_nm, target_width_um, False, 1.0),
             )
@@ -417,9 +421,21 @@ class SamplePanelHandler(Declarative.Handler):
 
         try:
             library = self._api.library
-            library.create_data_item_from_data(master_data, "Composite Survey")
-            self._append_output("Acquisition complete.\n")
-            self.cancel_enabled.value = False
+            y_scale_um = (sub_area_shift_m / sub_area[1][0]) * 1e6
+            x_scale_um = (sub_area_shift_m / sub_area[1][1]) * 1e6
+            dimensional_calibrations = [
+                self._api.create_calibration(0.0, y_scale_um, "um"),
+                self._api.create_calibration(0.0, x_scale_um, "um"),
+            ]
+
+            xdata = self._api.create_data_and_metadata(
+                master_data,
+                dimensional_calibrations=dimensional_calibrations,
+            )
+
+            library.create_data_item_from_data_and_metadata(xdata, "Composite Survey")
+            # library.create_data_item_from_data(master_data, "Composite Survey")
+            # self._append_output("Acquisition complete.\n")
         except Exception as e:
             self._append_output(f"Failed to publish result: {e!r}")
             self.cancel_enabled.value = False
