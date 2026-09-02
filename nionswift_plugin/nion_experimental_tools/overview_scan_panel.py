@@ -8,7 +8,7 @@ from nion.swift import Workspace
 from nion.swift import DocumentController
 from nion.swift.model import PlugInManager
 from nion.ui import Declarative
-from nion.utils import Registry
+from nion.utils import Registry, Model
 from nion.typeshed import API_1_0
 
 
@@ -63,8 +63,12 @@ class SamplePanelHandler(Declarative.Handler):
         self.progress_min: int = 0
         self.progress_text: str = "Progress:\nIdle"
         self._acq_task: typing.Optional[asyncio.Task[None]] = None
+        self.width_value: str = "30"
+        self.height_value: str = "30"
+        self.defocus: str = "-50000"
         self._cancel_requested: bool = False
         self._is_running: bool = False
+        self.cancel_enabled = Model.PropertyModel(False)
         self.ui_view = self._build_ui()
 
     def _set_progress(self, value: int, maximum: int, text: str) -> None:
@@ -113,7 +117,10 @@ class SamplePanelHandler(Declarative.Handler):
         )
         cancel_button = u.create_push_button(
             text="Cancel acquisition",
-            on_clicked="on_cancel_acquisition_clicked")
+            on_clicked="on_cancel_acquisition_clicked",
+            enabled="@binding(cancel_enabled.value)"
+
+        )
 
 
         return u.create_column(
@@ -136,8 +143,8 @@ class SamplePanelHandler(Declarative.Handler):
             u.create_spacing(8),
             cancel_button,
             u.create_stretch(),
-            width=500,
-            height=500
+            margin=6,
+            spacing=4
         )
 
     def _append_output(self, message: str) -> None:
@@ -198,6 +205,7 @@ class SamplePanelHandler(Declarative.Handler):
         counter = 0
         self._cancel_requested = False
         self._is_running = True
+        self.cancel_enabled.value = True
 
         try:
             tv_pixel_angle_rad = instrument.get_control_output("TVPixelAngle")
@@ -270,12 +278,14 @@ class SamplePanelHandler(Declarative.Handler):
             for row in range(size[0]):
                 if self._cancel_requested:
                     self._append_output_threadsafe("Acquisition Cancelled.")
+                    self.cancel_enabled.value = False
                     return None if not timer else (0, 0.0)
 
                 col_iter = range(size[1]) if (row % 2 == 0) else range(size[1] - 1, -1, -1)
                 for column in col_iter:
                     if self._cancel_requested:
                         self._append_output_threadsafe("Acquisition Cancelled.")
+                        self.cancel_enabled.value = False
                         return None if not timer else (0, 0.0)
 
                     if shift_x_control_name == "stage_position_m.x":
@@ -297,6 +307,7 @@ class SamplePanelHandler(Declarative.Handler):
                     while attempts < 4:
                         if self._cancel_requested:
                             self._append_output_threadsafe("Acquisition Cancelled.")
+                            self.cancel_enabled.value = False
                             return None if not timer else (0, 0.0)
                         attempts += 1
                         try:
@@ -315,6 +326,7 @@ class SamplePanelHandler(Declarative.Handler):
                     while attempts < 4:
                         if self._cancel_requested:
                             self._append_output_threadsafe("Acquisition Cancelled.")
+                            self.cancel_enabled.value = False
                             return None if not timer else (0, 0.0)
                         attempts += 1
                         try:
@@ -400,14 +412,17 @@ class SamplePanelHandler(Declarative.Handler):
                 return
         except Exception as e:
             self._append_output(f"Acquisition failed: {e!r}")
+            self.cancel_enabled.value = False
             return
 
         try:
             library = self._api.library
             library.create_data_item_from_data(master_data, "Composite Survey")
             self._append_output("Acquisition complete.\n")
+            self.cancel_enabled.value = False
         except Exception as e:
             self._append_output(f"Failed to publish result: {e!r}")
+            self.cancel_enabled.value = False
 
     def on_perform_acquisition_clicked(self, widget: typing.Any) -> None:
         try:
@@ -433,6 +448,7 @@ class SamplePanelHandler(Declarative.Handler):
         self._acq_task = self._event_loop.create_task(
             self._run_acquisition_async(instrument, camera, defocus_nm, target_width_um)
         )
+        self.cancel_enabled.value = False
 # ---------------------------------------------------------------------------
 # Swift Panel wrapper
 # ---------------------------------------------------------------------------
