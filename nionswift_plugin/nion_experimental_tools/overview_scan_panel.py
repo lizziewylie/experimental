@@ -329,7 +329,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
                             self._append_output_threadsafe(f"Timeout row= {row} column= {column}")
                             continue
                         break
-                    data = numpy.empty(supradata.data[master_sub_area[0][0]:master_sub_area[0][0] + master_sub_area[1][0]:reduce, master_sub_area[0][1]:master_sub_area[0][1] + master_sub_area[1][1]:reduce], dtype=numpy.float32)
+                    data = supradata.data[master_sub_area[0][0]:master_sub_area[0][0] + master_sub_area[1][0]:reduce, master_sub_area[0][1]:master_sub_area[0][1] + master_sub_area[1][1]:reduce]
                     slice_row = row
                     slice_column = column
                     slice0 = slice(slice_row * sub_area[1][0], (slice_row + 1) * sub_area[1][0])
@@ -507,8 +507,8 @@ class OverviewScanPanelExtension:
     extension_id = "sample.panel"
 
     def __init__(self, api_broker: typing.Any) -> None:
-        self.__component = Registry.register_component(OverviewScanPanelUI(), {"overview-scan-panel"})
-        self.__panel = Workspace.WorkspaceManager().register_panel(
+        Registry.register_component(OverviewScanPanelUI(), {"overview-scan-panel"})
+        Workspace.WorkspaceManager().register_panel(
             OverviewScanPanel,
             "overview-scan-main-panel",
             _("Overview Scan"),
