@@ -519,3 +519,4 @@ class OverviewScanPanelExtension:
 
     def close(self) -> None:
         pass
+
