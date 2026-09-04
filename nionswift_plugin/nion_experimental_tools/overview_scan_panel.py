@@ -8,9 +8,9 @@ from nion.swift import Workspace
 from nion.swift import DocumentController
 from nion.swift.model import PlugInManager
 from nion.ui import Declarative
-from nion.utils import Registry, Model
+from nion.utils import Registry
+from nion.utils import Model
 from nion.typeshed import API_1_0
-
 
 import time
 import math
@@ -18,26 +18,28 @@ import numpy
 
 from nion.instrumentation import camera_base
 from nion.instrumentation import stem_controller as stem_controller_module
+import numpy.typing as npt
 
 import asyncio
 
 _ = gettext.gettext
 
 
-class SamplePanelUI:
+class OverviewScanPanelUI:
     panel_type = "overview-scan-panel"
 
+    @staticmethod
     def get_ui_handler(
-            self,
             api_broker: PlugInManager.APIBroker,
             event_loop: typing.Optional[asyncio.AbstractEventLoop] = None,
             **kwargs: typing.Any,
     ) -> Declarative.HandlerLike:
         api = api_broker.get_api("~1.0")
         document_controller = kwargs.get("document_controller")
-        return SamplePanelHandler(api, event_loop, document_controller)
+        return OverviewSamplePanelHandler(api, event_loop, document_controller)
 
-class SamplePanelHandler(Declarative.Handler):
+
+class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
     """Declarative handler for the Sample docked panel."""
 
     def __init__(
@@ -50,10 +52,6 @@ class SamplePanelHandler(Declarative.Handler):
         super().__init__()
         self._api = api
         self._event_loop = event_loop or asyncio.get_event_loop()
-        self._document_controller = document_controller
-        self.width_value: str = ""
-        self.height_value: str = ""
-        self.defocus: str = ""
         self.instrument = typing.cast(stem_controller_module.STEMController, Registry.get_component('stem_controller'))
         self.camera = typing.cast(camera_base.CameraHardwareSource, self.instrument.ronchigram_camera)
         self._document_controller = document_controller
@@ -66,6 +64,7 @@ class SamplePanelHandler(Declarative.Handler):
         self.width_value: str = "30"
         self.height_value: str = "30"
         self.defocus: str = "-50000"
+        self.binning: str = "1"
         self._cancel_requested: bool = False
         self._is_running: bool = False
         self.cancel_enabled = Model.PropertyModel(False)
@@ -82,25 +81,30 @@ class SamplePanelHandler(Declarative.Handler):
     def _set_progress_threadsafe(self, value: int, maximum: int, text: str) -> None:
         self._event_loop.call_soon_threadsafe(self._set_progress, value, maximum, text)
 
-    def _build_ui(self) -> typing.Mapping[str, typing.Any]:
+    @staticmethod
+    def _build_ui() -> typing.Mapping[str, typing.Any]:
         u = Declarative.DeclarativeUI()
         title = u.create_label(text="Overview Scan", font="bold")
         time_button = u.create_push_button(
-            text="Estimate time to acquire survey image",
+            text="Estimate scan size and duration",
             on_clicked="on_estimate_time_clicked"
         )
         acq_button = u.create_push_button(
-            text="Perform wide-field acquisition",
+            text="Scan",
             on_clicked="on_perform_acquisition_clicked"
         )
-        width_label = u.create_label(text="Desired width of image (um):")
+        properties_label = u.create_label(text="Desired properties of image:")
+        width_label = u.create_label(text="Width (um):")
         width_field = u.create_line_edit(text="@binding(width_value)", editable=True)
 
-        height_label = u.create_label(text="Desired height of image (um):")
+        height_label = u.create_label(text="Height (um):")
         height_field = u.create_line_edit(text="@binding(height_value)", editable=True)
 
-        defocus_label = u.create_label(text="Desired defocus (nm):")
+        defocus_label = u.create_label(text="Defocus (nm):")
         defocus = u.create_line_edit(text="@binding(defocus)", editable=True)
+
+        reduce_label = u.create_label(text="Binning:")
+        reduce_val = u.create_line_edit(text="@binding(binning)", editable=True)
 
         output_label = u.create_label(text="Output:")
         output_box = u.create_text_edit(
@@ -116,36 +120,32 @@ class SamplePanelHandler(Declarative.Handler):
             width=500
         )
         cancel_button = u.create_push_button(
-            text="Cancel acquisition",
+            text="Cancel",
             on_clicked="on_cancel_acquisition_clicked",
             enabled="@binding(cancel_enabled.value)"
 
         )
 
-
-        return u.create_column(
+        return typing.cast(typing.Mapping[str, typing.Any], u.create_column(
             title,
-            u.create_row(width_label, u.create_spacing(4), width_field),
+            properties_label,
+            u.create_row(width_label, u.create_spacing(4), width_field, u.create_spacing(20), height_label, u.create_spacing(4), height_field),
             u.create_spacing(4),
-            u.create_row(height_label, u.create_spacing(4), height_field),
-            u.create_spacing(4),
-            u.create_row(defocus_label, u.create_spacing(4),  defocus),
+            u.create_row(defocus_label, u.create_spacing(4), defocus, u.create_spacing(20), reduce_label, u.create_spacing(4), reduce_val),
             u.create_spacing(8),
-            time_button,
+            u.create_row(time_button, u.create_spacing(20), acq_button),
             u.create_spacing(8),
-            acq_button,
-            u.create_spacing(8),
-            output_label,
-            output_box,
-            u.create_spacing(50),
             progress_label,
             progress_bar,
             u.create_spacing(8),
             cancel_button,
+            u.create_spacing(8),
+            output_label,
+            output_box,
             u.create_stretch(),
             margin=6,
             spacing=4
-        )
+        ))
 
     def _append_output(self, message: str) -> None:
         self.output_text += f"{message}\n"
@@ -158,7 +158,6 @@ class SamplePanelHandler(Declarative.Handler):
         if self._is_running:
             self._cancel_requested = True
             self._set_progress_threadsafe(self.progress_value, 100, "Cancel requested...")
-
 
     def find_matrix(self, ds: float = 16e-6) -> numpy.ndarray:
         instrument = self.instrument
@@ -194,13 +193,12 @@ class SamplePanelHandler(Declarative.Handler):
 
         return mat
 
-
     def acquisition(self,
-                    instrument,
-                    camera,
-                    defocus,
-                    target_width_m: tuple[float | int, float | int], timer = False,
-                    reduce: float = 1.0):
+                    instrument: stem_controller_module.STEMController,
+                    camera: camera_base.CameraHardwareSource,
+                    defocus: float,
+                    target_width_m: tuple[float | int, float | int], timer: bool = False,
+                    reduce: float = 1.0) -> tuple[npt.NDArray[numpy.float32], int, float] | tuple[npt.NDArray[numpy.float32], tuple[tuple[int, int], tuple[int, int]], float, float] | tuple[int, float] | None:
 
         counter = 0
         self._cancel_requested = False
@@ -208,7 +206,7 @@ class SamplePanelHandler(Declarative.Handler):
         self.cancel_enabled.value = True
 
         try:
-            tv_pixel_angle_rad = instrument.get_control_output("TVPixelAngle")
+            tv_pixel_angle_rad = float(instrument.get_control_output("TVPixelAngle"))
         except Exception:
             tv_pixel_angle_rad = None
 
@@ -222,7 +220,7 @@ class SamplePanelHandler(Declarative.Handler):
 
             frame = camera.grab_next_to_start()[0]
             assert frame is not None
-            tv_pixel_angle_rad = frame.dimensional_calibrations[0].scale
+            tv_pixel_angle_rad = float(frame.dimensional_calibrations[0].scale)
 
         # grab stage original location
         sx_m = instrument.get_control_output(shift_x_control_name)
@@ -233,8 +231,6 @@ class SamplePanelHandler(Declarative.Handler):
         pixel_size_m = abs(defocus) * math.tan(tv_pixel_angle_rad)
 
         image_size = camera.get_expected_dimensions(camera.get_current_frame_parameters())
-        image_dtype = numpy.float32
-
         image_width_m = abs(defocus) * math.sin(tv_pixel_angle_rad * image_size[0])
 
         master_sub_area_size = image_size[0] // 2, image_size[1] // 2
@@ -250,10 +246,9 @@ class SamplePanelHandler(Declarative.Handler):
         frames_needed_height = math.ceil(target_width_m[1] * 1e-6 / sub_area_shift_m)
         size = (frames_needed_width, frames_needed_height)
 
-        total_images = frames_needed_width* frames_needed_height
+        total_images = frames_needed_width * frames_needed_height
 
-        master_data = numpy.empty((sub_area[1][0] * size[0], sub_area[1][1] * size[1]), image_dtype)
-
+        master_data = typing.cast(npt.NDArray[numpy.float32], numpy.empty((sub_area[1][0] * size[0], sub_area[1][1] * size[1]), dtype=numpy.float32))
         if not timer:
             self._append_output_threadsafe(f"Stage starting position: {sx_m * 1e6, sy_m * 1e6} um")
             self._append_output_threadsafe(f"Pixel size: {(pixel_size_m * 1e9):.3f} nm")
@@ -264,14 +259,10 @@ class SamplePanelHandler(Declarative.Handler):
 
             self._set_progress_threadsafe(0, total_images, "Progress:\nStarting acquisition...")
 
-        else:
-            self._append_output_threadsafe(f"Need to acquire {frames_needed_width} x {frames_needed_height} frames for a {target_width_m[0]} um x {target_width_m[1]} um image \n")
-
-
         t1 = time.time()
 
         if timer:
-            size = (2,1)
+            size = (2, 1)
         else:
             size = size
 
@@ -338,7 +329,7 @@ class SamplePanelHandler(Declarative.Handler):
                             self._append_output_threadsafe(f"Timeout row= {row} column= {column}")
                             continue
                         break
-                    data = supradata.data[master_sub_area[0][0]:master_sub_area[0][0] + master_sub_area[1][0]:reduce, master_sub_area[0][1]:master_sub_area[0][1] + master_sub_area[1][1]:reduce]
+                    data = numpy.empty(supradata.data[master_sub_area[0][0]:master_sub_area[0][0] + master_sub_area[1][0]:reduce, master_sub_area[0][1]:master_sub_area[0][1] + master_sub_area[1][1]:reduce], dtype=numpy.float32)
                     slice_row = row
                     slice_column = column
                     slice0 = slice(slice_row * sub_area[1][0], (slice_row + 1) * sub_area[1][0])
@@ -347,10 +338,10 @@ class SamplePanelHandler(Declarative.Handler):
 
                     # inside loop after counter increment or frame write
                     if not timer:
-                        pct = (100 * counter / total_images)
-                        self._set_progress_threadsafe(pct, total_images, f"Progress:\nAcquiring {counter}/{total_images}")
+                        pct = int(100 * counter / total_images)
+                        self._set_progress_threadsafe(pct, total_images, f"Progress:\nAcquiring {counter}/{total_images} frames")
             t2 = time.time()
-            time_total = t2-t1
+            time_total = t2 - t1
         finally:
             # restore stage to original location
             instrument.set_control_output(shift_x_control_name, sx_m)
@@ -360,60 +351,70 @@ class SamplePanelHandler(Declarative.Handler):
 
         if timer:
             self.cancel_enabled.value = False
-            return total_images, time_total
+            return master_data, total_images, time_total
         else:
             self.cancel_enabled.value = False
             return master_data, sub_area, sub_area_shift_m, pixel_size_m
-
 
     def on_estimate_time_clicked(self, widget: typing.Any) -> None:
         try:
             width_um = int(self.width_value)
             height_um = int(self.height_value)
             defocus_nm = int(self.defocus) * 1e-9
+            reduce = int(self.binning)
         except ValueError:
-            self._append_output("Please enter width, height, and defocus as integers.")
+            self._append_output("Please enter width, height, binning and defocus as integers.")
             return
-
-        if width_um < 1 or height_um < 1:
+        if width_um < 1 or height_um < 1 or reduce < 1:
             self._append_output("Please ensure width and height are positive.")
             return
         if width_um >= 1000 or height_um >= 1000:
             self._append_output("Warning: Requested scan size is outside of sensible limit")
             return
+
         if abs(defocus_nm * 1e9) < 1000 or abs(defocus_nm * 1e9) > 500000:
             self._append_output("Warning: Requested defocus is outside of sensible limit")
             return
-
         instrument = self.instrument
         camera = self.camera
-        reduce = 1.0
-        target_width_m = (width_um, height_um)
-        total_images, t_total = self.acquisition(instrument, camera, defocus_nm, target_width_m, timer=True, reduce=reduce)
 
-        time_taken = t_total * total_images / 2 #average time to move the stage
+        target_width_m = (width_um, height_um)
+        result = self.acquisition(instrument, camera, defocus_nm, target_width_m, timer=True, reduce=reduce)
+        if result is None or len(result) != 3:
+            return
+        master_data, total_images, t_total = result
+        image_size = master_data.shape
+        time_taken = t_total * total_images / 2  # average time to move the stage
         self._append_output(
             f"This acquisition will take approximately {(time_taken // 3600):.0f}h {((time_taken % 3600) / 60):.0f}min {(time_taken % 60):.0f}s"
         )
+        self._append_output(f"The size of the final data item will be {image_size}.\n")
+        if any(dim > 32768 for dim in image_size):
+            self._append_output("The final data item is too large to be used in the sample navigation window. Consider increasing the binning or reducing the size of the acquisition.\n")
+            return
+        else:
+            return
 
     async def _run_acquisition_async(
         self,
-        instrument,
-        camera,
+        instrument: stem_controller_module.STEMController,
+        camera: camera_base.CameraHardwareSource,
         defocus_nm: float,
         target_width_um: tuple[int, int],
+        reduce: int
     ) -> None:
         loop = self._event_loop
 
         self._append_output_threadsafe("Starting acquisition...\n")
         try:
-            master_data, sub_area, sub_area_shift_m, pixel_size_m = await loop.run_in_executor(
-                None,
-                lambda: self.acquisition(instrument, camera, defocus_nm, target_width_um, False, 1.0),
+            result = await loop.run_in_executor(
+                None, self.acquisition, instrument, camera, defocus_nm, target_width_um, False, reduce
             )
-            if master_data is None:
+            if result is None or len(result) != 4:
                 self._set_progress(0, 100, "Progress:\nIdle")
                 return
+
+            master_data, sub_area, sub_area_shift_m, pixel_size_m = result
         except Exception as e:
             self._append_output(f"Acquisition failed: {e!r}")
             self.cancel_enabled.value = False
@@ -434,8 +435,7 @@ class SamplePanelHandler(Declarative.Handler):
             )
 
             library.create_data_item_from_data_and_metadata(xdata, "Composite Survey")
-            # library.create_data_item_from_data(master_data, "Composite Survey")
-            # self._append_output("Acquisition complete.\n")
+            self._append_output("Acquisition complete.\n")
         except Exception as e:
             self._append_output(f"Failed to publish result: {e!r}")
             self.cancel_enabled.value = False
@@ -445,12 +445,18 @@ class SamplePanelHandler(Declarative.Handler):
             width_um = int(self.width_value)
             height_um = int(self.height_value)
             defocus_nm = int(self.defocus) * 1e-9
+            reduce = int(self.binning)
         except ValueError:
-            self._append_output("Please enter width, height, and defocus as integers.")
+            self._append_output("Please enter width, height, binning and defocus as integers.")
             return
-
-        if width_um <= 0 or height_um <= 0:
+        if width_um < 1 or height_um < 1 or reduce < 1:
             self._append_output("Please ensure width and height are positive.")
+            return
+        if width_um >= 1000 or height_um >= 1000:
+            self._append_output("Warning: Requested scan size is outside of sensible limit")
+            return
+        if abs(defocus_nm * 1e9) < 1000 or abs(defocus_nm * 1e9) > 500000:
+            self._append_output("Warning: Requested defocus is outside of sensible limit")
             return
 
         if self._acq_task and not self._acq_task.done():
@@ -462,14 +468,15 @@ class SamplePanelHandler(Declarative.Handler):
         target_width_um = (width_um, height_um)
 
         self._acq_task = self._event_loop.create_task(
-            self._run_acquisition_async(instrument, camera, defocus_nm, target_width_um)
+            self._run_acquisition_async(instrument, camera, defocus_nm, target_width_um, reduce)
         )
         self.cancel_enabled.value = False
 # ---------------------------------------------------------------------------
 # Swift Panel wrapper
 # ---------------------------------------------------------------------------
 
-class SamplePanel(Panel.Panel):
+
+class OverviewScanPanel(Panel.Panel):  # type: ignore[misc]
     """Swift panel class instantiated by the Workspace panel manager."""
 
     def __init__(
@@ -494,50 +501,21 @@ class SamplePanel(Panel.Panel):
                 break
 
 
-class PanelSampleExtension:
+class OverviewScanPanelExtension:
 
     # required for Swift to recognize this as an extension class.
     extension_id = "sample.panel"
 
-    def __init__(self, api_broker):
-        self.__component = Registry.register_component(SamplePanelUI(), {"overview-scan-panel"})
+    def __init__(self, api_broker: typing.Any) -> None:
+        self.__component = Registry.register_component(OverviewScanPanelUI(), {"overview-scan-panel"})
         self.__panel = Workspace.WorkspaceManager().register_panel(
-            SamplePanel,
-            "sample-main-panel",
+            OverviewScanPanel,
+            "overview-scan-main-panel",
             _("Overview Scan"),
             ["left", "right"],
             "right",
             {"panel_type": "overview-scan-panel"},
         )
 
-    def close(self):
+    def close(self) -> None:
         pass
-
-
-# class SampleMenuItemDelegate:
-#
-#     def __init__(self, api):
-#         self.__api = api
-#         self.menu_id = "example_menu"  # required, specify menu_id where this item will go
-#         self.menu_name = _("Examples")  # optional, specify default name if not a standard menu
-#         self.menu_before_id = "window_menu"  # optional, specify before menu_id if not a standard menu
-#         self.menu_item_name = _("Run Sample")  # menu item name
-#
-#     def menu_item_execute(self, window):
-#         sampler.sample_function()
-#
-#
-# class MenuSampleExtension:
-#
-#     # required for Swift to recognize this as an extension class.
-#     extension_id = "sample.menu_item_call_sample"
-#
-#     def __init__(self, api_broker):
-#         # grab the api object.
-#         api = api_broker.get_api(version="~1.0")
-#         # be sure to keep a reference or it will be closed immediately.
-#         self.__menu_item_ref = api.create_menu_item(SampleMenuItemDelegate(api))
-#
-#     def close(self):
-#         self.__menu_item_ref.close()
-#         self.__menu_item_ref = None
