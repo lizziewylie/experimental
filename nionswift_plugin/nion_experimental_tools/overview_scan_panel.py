@@ -1,8 +1,11 @@
-# standard libraries
 import gettext
 import typing
 
-# nionswift libraries
+import time
+import math
+import numpy
+import asyncio
+
 from nion.swift import Panel
 from nion.swift import Workspace
 from nion.swift import DocumentController
@@ -12,15 +15,9 @@ from nion.utils import Registry
 from nion.utils import Model
 from nion.typeshed import API_1_0
 
-import time
-import math
-import numpy
-
 from nion.instrumentation import camera_base
 from nion.instrumentation import stem_controller as stem_controller_module
 import numpy.typing as npt
-
-import asyncio
 
 _ = gettext.gettext
 
@@ -223,38 +220,38 @@ class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
             tv_pixel_angle_rad = float(frame.dimensional_calibrations[0].scale)
 
         # grab stage original location
-        sx_m = instrument.get_control_output(shift_x_control_name)
-        sy_m = instrument.get_control_output(shift_y_control_name)
+        sx_um = instrument.get_control_output(shift_x_control_name)
+        sy_um = instrument.get_control_output(shift_y_control_name)
         df_original = instrument.get_control_output("C10")
 
         instrument.set_control_output("C10", defocus)
-        pixel_size_m = abs(defocus) * math.tan(tv_pixel_angle_rad)
+        pixel_size_nm = abs(defocus) * math.tan(tv_pixel_angle_rad)
 
         image_size = camera.get_expected_dimensions(camera.get_current_frame_parameters())
-        image_width_m = abs(defocus) * math.sin(tv_pixel_angle_rad * image_size[0])
+        image_width_um = abs(defocus) * math.sin(tv_pixel_angle_rad * image_size[0])
 
         master_sub_area_size = image_size[0] // 2, image_size[1] // 2
         master_sub_area = (image_size[0] // 2 - master_sub_area_size[0] // 2, image_size[1] // 2 - master_sub_area_size[1] // 2), master_sub_area_size
 
         reduce = max(1, int(reduce))
 
-        sub_area_shift_m = image_width_m * (master_sub_area[1][0] / image_size[0])
+        sub_area_shift_um = image_width_um * (master_sub_area[1][0] / image_size[0])
 
         sub_area = (master_sub_area[0][0] // reduce, master_sub_area[0][1] // reduce), (master_sub_area[1][0] // reduce, master_sub_area[1][1] // reduce)
 
-        frames_needed_width = math.ceil(target_width_m[0] * 1e-6 / sub_area_shift_m)
-        frames_needed_height = math.ceil(target_width_m[1] * 1e-6 / sub_area_shift_m)
+        frames_needed_width = math.ceil(target_width_m[0] * 1e-6 / sub_area_shift_um)
+        frames_needed_height = math.ceil(target_width_m[1] * 1e-6 / sub_area_shift_um)
         size = (frames_needed_width, frames_needed_height)
-
+        total_image_height = size[1] * image_width_um
         total_images = frames_needed_width * frames_needed_height
 
         master_data = typing.cast(npt.NDArray[numpy.float32], numpy.empty((sub_area[1][0] * size[0], sub_area[1][1] * size[1]), dtype=numpy.float32))
         if not timer:
-            self._append_output_threadsafe(f"Stage starting position: {sx_m * 1e6, sy_m * 1e6} um")
-            self._append_output_threadsafe(f"Pixel size: {(pixel_size_m * 1e9):.3f} nm")
+            self._append_output_threadsafe(f"Stage starting position: {sx_um * 1e6, sy_um * 1e6} um")
+            self._append_output_threadsafe(f"Pixel size: {(pixel_size_nm * 1e9):.3f} nm")
             self._append_output_threadsafe(f"Defocus: {(defocus * 1e9):.0f} nm")
 
-            self._append_output_threadsafe(f"Image width: {image_width_m * 1e6} um")
+            self._append_output_threadsafe(f"Frame width: {image_width_um * 1e6} um")
             self._append_output_threadsafe(f"Master size: {master_data.shape}\n")
 
             self._set_progress_threadsafe(0, total_images, "Progress:\nStarting acquisition...")
@@ -281,17 +278,17 @@ class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
                         return None if not timer else (0, 0.0)
 
                     if shift_x_control_name == "stage_position_m.x":
-                        delta_x_m = - sub_area_shift_m * (column - size[1] // 2)
-                        delta_y_m = - sub_area_shift_m * (row - size[0] // 2)
+                        delta_x_um = - sub_area_shift_um * (column - size[1] // 2)
+                        delta_y_um = - sub_area_shift_um * (row - size[0] // 2)
                     else:
                         matrix = self.find_matrix()
-                        delta_x_m = - sub_area_shift_m * (column - size[1] // 2)
-                        delta_y_m = - sub_area_shift_m * (row - size[0] // 2)
-                        delta_camera = numpy.array([delta_x_m, delta_y_m], dtype=numpy.float64)
+                        delta_x_um = - sub_area_shift_um * (column - size[1] // 2)
+                        delta_y_um = - sub_area_shift_um * (row - size[0] // 2)
+                        delta_camera = numpy.array([delta_x_um, delta_y_um], dtype=numpy.float64)
                         delta_fast = numpy.linalg.solve(matrix, delta_camera)
 
-                        delta_x_m = float(delta_fast[0])
-                        delta_y_m = float(delta_fast[1])
+                        delta_x_um = float(delta_fast[0])
+                        delta_y_um = float(delta_fast[1])
 
                     counter += 1
 
@@ -304,8 +301,8 @@ class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
                         attempts += 1
                         try:
                             tolerance_factor = 0.0001
-                            instrument.set_control_output(shift_x_control_name, sx_m - delta_x_m, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
-                            instrument.set_control_output(shift_y_control_name, sy_m - delta_y_m, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
+                            instrument.set_control_output(shift_x_control_name, sx_um - delta_x_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
+                            instrument.set_control_output(shift_y_control_name, sy_um - delta_y_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
                         except TimeoutError:
                             self._append_output_threadsafe(f"Timeout row= {row} column= {column}")
                             continue
@@ -323,8 +320,8 @@ class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
                         attempts += 1
                         try:
                             tolerance_factor = 0.0001
-                            instrument.set_control_output(shift_x_control_name, sx_m, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
-                            instrument.set_control_output(shift_y_control_name, sy_m, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
+                            instrument.set_control_output(shift_x_control_name, sx_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
+                            instrument.set_control_output(shift_y_control_name, sy_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
                         except TimeoutError:
                             self._append_output_threadsafe(f"Timeout row= {row} column= {column}")
                             continue
@@ -344,8 +341,8 @@ class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
             time_total = t2 - t1
         finally:
             # restore stage to original location
-            instrument.set_control_output(shift_x_control_name, sx_m)
-            instrument.set_control_output(shift_y_control_name, sy_m)
+            instrument.set_control_output(shift_x_control_name, sx_um)
+            instrument.set_control_output(shift_y_control_name, sy_um)
             instrument.set_control_output("C10", df_original)
             self._set_progress_threadsafe(0, 100, "Progress:\n Idle")
 
@@ -354,7 +351,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
             return master_data, total_images, time_total
         else:
             self.cancel_enabled.value = False
-            return master_data, sub_area, sub_area_shift_m, pixel_size_m
+            return master_data, sub_area, sub_area_shift_um, pixel_size_nm, total_image_height
 
     def on_estimate_time_clicked(self, widget: typing.Any) -> None:
         try:
@@ -378,8 +375,8 @@ class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
         instrument = self.instrument
         camera = self.camera
 
-        target_width_m = (width_um, height_um)
-        result = self.acquisition(instrument, camera, defocus_nm, target_width_m, timer=True, reduce=reduce)
+        target_width_um = (width_um, height_um)
+        result = self.acquisition(instrument, camera, defocus_nm, target_width_um, timer=True, reduce=reduce)
         if result is None or len(result) != 3:
             return
         master_data, total_images, t_total = result
@@ -410,11 +407,11 @@ class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
             result = await loop.run_in_executor(
                 None, self.acquisition, instrument, camera, defocus_nm, target_width_um, False, reduce
             )
-            if result is None or len(result) != 4:
+            if result is None or len(result) != 5:
                 self._set_progress(0, 100, "Progress:\nIdle")
                 return
 
-            master_data, sub_area, sub_area_shift_m, pixel_size_m = result
+            master_data, sub_area, sub_area_shift_m, pixel_size_m, total_image_height = result
         except Exception as e:
             self._append_output(f"Acquisition failed: {e!r}")
             self.cancel_enabled.value = False
@@ -436,6 +433,11 @@ class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
 
             library.create_data_item_from_data_and_metadata(xdata, "Composite Survey")
             self._append_output("Acquisition complete.\n")
+
+            self._append_output("Image properties:")
+            self._append_output_threadsafe(f"Total image height: {total_image_height * 1e3} mm")
+            self._append_output(f"x offset: {x_scale_um} um")
+            self._append_output(f"y offset: {y_scale_um} um")
         except Exception as e:
             self._append_output(f"Failed to publish result: {e!r}")
             self.cancel_enabled.value = False
