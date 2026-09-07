@@ -36,7 +36,7 @@ class OverviewScanPanelUI:
         return OverviewSamplePanelHandler(api, event_loop, document_controller)
 
 
-class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
+class OverviewSamplePanelHandler(Declarative.Handler):
     """Declarative handler for the Sample docked panel."""
 
     def __init__(
@@ -195,8 +195,18 @@ class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
                     camera: camera_base.CameraHardwareSource,
                     defocus: float,
                     target_width_m: tuple[float | int, float | int], timer: bool = False,
-                    reduce: float = 1.0) -> tuple[npt.NDArray[numpy.float32], int, float] | tuple[npt.NDArray[numpy.float32], tuple[tuple[int, int], tuple[int, int]], float, float] | tuple[int, float] | None:
-
+                    reduce: float = 1.0) -> (
+    tuple[npt.NDArray[numpy.float32], int, float]  # timer=True
+    | tuple[
+        npt.NDArray[numpy.float32],
+        tuple[tuple[int, int], tuple[int, int]],
+        float,
+        float,
+        float,  # total_image_height
+      ]  # timer=False
+    | tuple[int, float]  # cancel path in timer mode
+    | None  # cancel path in non-timer mode
+):
         counter = 0
         self._cancel_requested = False
         self._is_running = True
@@ -478,7 +488,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):  # type: ignore[misc]
 # ---------------------------------------------------------------------------
 
 
-class OverviewScanPanel(Panel.Panel):  # type: ignore[misc]
+class OverviewScanPanel(Panel.Panel):
     """Swift panel class instantiated by the Workspace panel manager."""
 
     def __init__(
