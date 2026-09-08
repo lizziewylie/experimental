@@ -198,7 +198,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
                     target_width_um: tuple[float | int, float | int], timer: bool = False,
                     reduce: float = 1.0) -> (tuple[npt.NDArray[numpy.float64], int, float] |
                                              tuple[npt.NDArray[numpy.float64], tuple[tuple[int, int], tuple[int, int]], float, float, float, float, float] |
-                                             tuple[int, float] |None):
+                                             tuple[int, float] | None):
         counter = 0
         self._cancel_requested = False
         self._is_running = True
@@ -448,8 +448,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
             if not export_path.parent.exists():
                 export_path.parent.mkdir(parents=True, exist_ok=True)
 
-            background = img.save(export_path)
-
+            img.save(export_path)
 
         except Exception as e:
             self._append_output(f"Failed to publish result: {e!r}")
@@ -462,11 +461,12 @@ class OverviewSamplePanelHandler(Declarative.Handler):
                 cartridge_string = result.value
                 self._append_output_threadsafe(f"Cartridge in stage: {cartridge_string}")
 
+                properties = {"ImageScaleRad_m": total_image_height, "ImageOffsetX_px": sx_um / pixel_size_m, "ImageOffsetY_px": sy_um / pixel_size_m, "ImageFile": str(export_path)}
+
                 # Set the values on the cartridge
-                stem_controller._put_rest_api("/exchange/cartridges/" + str(cartridge_string) + "/ImageScaleRad_m", content=total_image_height)
-                stem_controller._put_rest_api("/exchange/cartridges/" + str(cartridge_string) + "/ImageOffsetX_px", content=sx_um/pixel_size_m)
-                stem_controller._put_rest_api("/exchange/cartridges/" + str(cartridge_string) + "/ImageOffsetY_px", content=sy_um/pixel_size_m)
-                stem_controller._put_rest_api("/exchange/cartridges/" + str(cartridge_string) + "/ImageFile", content=background)
+
+                stem_controller._put_rest_api(f"/exchange/cartridges/{cartridge_string}", content=properties)
+
             else:
                 self._append_output_threadsafe(f"Failed to get CartridgeInStage: {result.exception}")
                 return
