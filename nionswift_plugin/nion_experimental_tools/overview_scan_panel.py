@@ -21,7 +21,7 @@ from nion.utils import Model
 from nion.utils import Registry
 
 _ = gettext.gettext
-
+JSONDict = dict[str, typing.Any]
 
 class OverviewScanPanelUI:
     panel_type = "overview-scan-panel"
@@ -283,7 +283,6 @@ class OverviewSamplePanelHandler(Declarative.Handler):
                         delta_x_um = - sub_area_shift_um * (column - size[1] // 2)
                         delta_y_um = - sub_area_shift_um * (row - size[0] // 2)
                     else:
-                        matrix = self.find_matrix()
                         delta_x_um = - sub_area_shift_um * (column - size[1] // 2)
                         delta_y_um = - sub_area_shift_um * (row - size[0] // 2)
                         delta_camera = numpy.array([delta_x_um, delta_y_um], dtype=numpy.float64)
@@ -444,7 +443,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
             data_uint8 = ((data_array - data_array.min()) / (data_array.max() - data_array.min()) * 255).astype(numpy.uint8)
 
             img = Image.fromarray(data_uint8)
-            export_path = Path(r"C:\Users\Elizabeth.Wylie\Pictures\overview-scan.jpg")
+            export_path = Path(r"C:\AS2\AS2User\Pictures\overview-scan.jpg")
             if not export_path.parent.exists():
                 export_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -456,19 +455,20 @@ class OverviewSamplePanelHandler(Declarative.Handler):
             return
 
         try:
-            result = stem_controller._get_rest_api("/exchange?property=CartridgeInStage")
-            if result.is_valid:
-                cartridge_string = result.value
+            cartridge_result = stem_controller._get_rest_api("/exchange?property=CartridgeInStage")
+            if cartridge_result.is_valid:
+                cartridge_string = cartridge_result.value
                 self._append_output_threadsafe(f"Cartridge in stage: {cartridge_string}")
 
-                properties = {"ImageScaleRad_m": total_image_height, "ImageOffsetX_px": sx_um / pixel_size_m, "ImageOffsetY_px": sy_um / pixel_size_m, "ImageFile": str(export_path)}
+                properties: JSONDict = {"ImageScaleRad_m": total_image_height, "ImageOffsetX_px": sx_um / pixel_size_m, "ImageOffsetY_px": sy_um / pixel_size_m, "ImageFile": str(export_path)}
 
                 # Set the values on the cartridge
 
                 stem_controller._put_rest_api(f"/exchange/cartridges/{cartridge_string}", content=properties)
-
+                if hasattr(cartridge_result, "is_valid") and not cartridge_result.is_valid:
+                    self._append_output_threadsafe(f"PUT failed: {cartridge_result.exception}")
             else:
-                self._append_output_threadsafe(f"Failed to get CartridgeInStage: {result.exception}")
+                self._append_output_threadsafe(f"Failed to get CartridgeInStage: {cartridge_result.exception}")
                 return
 
         except Exception as e:
