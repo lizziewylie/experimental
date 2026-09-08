@@ -1,23 +1,24 @@
-import gettext
-import typing
-
-import time
-import math
-import numpy
 import asyncio
+import gettext
+import math
+import time
+import typing
+from pathlib import Path
 
-from nion.swift import Panel
-from nion.swift import Workspace
-from nion.swift import DocumentController
-from nion.swift.model import PlugInManager
-from nion.ui import Declarative
-from nion.utils import Registry
-from nion.utils import Model
-from nion.typeshed import API_1_0
+import numpy
+import numpy.typing as npt
+from PIL import Image
 
 from nion.instrumentation import camera_base
 from nion.instrumentation import stem_controller as stem_controller_module
-import numpy.typing as npt
+from nion.swift import DocumentController
+from nion.swift import Panel
+from nion.swift import Workspace
+from nion.swift.model import PlugInManager
+from nion.typeshed import API_1_0
+from nion.ui import Declarative
+from nion.utils import Model
+from nion.utils import Registry
 
 _ = gettext.gettext
 
@@ -49,8 +50,8 @@ class OverviewSamplePanelHandler(Declarative.Handler):
         super().__init__()
         self._api = api
         self._event_loop = event_loop or asyncio.get_event_loop()
-        self.instrument = typing.cast(stem_controller_module.STEMController, Registry.get_component('stem_controller'))
-        self.camera = typing.cast(camera_base.CameraHardwareSource, self.instrument.ronchigram_camera)
+        self.stem_controller = typing.cast(stem_controller_module.STEMController, Registry.get_component('stem_controller'))
+        self.camera = typing.cast(camera_base.CameraHardwareSource, self.stem_controller.ronchigram_camera)
         self._document_controller = document_controller
         self.output_text: str = ""
         self.progress_value: int = 0
@@ -157,28 +158,28 @@ class OverviewSamplePanelHandler(Declarative.Handler):
             self._set_progress_threadsafe(self.progress_value, 100, "Cancel requested...")
 
     def find_matrix(self, ds: float = 16e-6) -> numpy.ndarray:
-        instrument = self.instrument
-        sx0 = instrument.get_control_output("SShft.sx")
-        sy0 = instrument.get_control_output("SShft.sy")
-        x0 = instrument.get_control_output("SShft.x")
-        y0 = instrument.get_control_output("SShft.y")
+        stem_controller = self.stem_controller
+        sx0 = stem_controller.get_control_output("SShft.sx")
+        sy0 = stem_controller.get_control_output("SShft.sy")
+        x0 = stem_controller.get_control_output("SShft.x")
+        y0 = stem_controller.get_control_output("SShft.y")
 
-        instrument.set_control_output("SShft.sx", sx0 + ds)
-        x1 = instrument.get_control_output("SShft.x")
-        y1 = instrument.get_control_output("SShft.y")
+        stem_controller.set_control_output("SShft.sx", sx0 + ds)
+        x1 = stem_controller.get_control_output("SShft.x")
+        y1 = stem_controller.get_control_output("SShft.y")
 
         dx_from_sx = x1 - x0
         dy_from_sx = y1 - y0
 
-        instrument.set_control_output("SShft.sx", sx0)
-        instrument.set_control_output("SShft.sy", sy0)
-        instrument.set_control_output("SShft.x", x0)
-        instrument.set_control_output("SShft.y", y0)
+        stem_controller.set_control_output("SShft.sx", sx0)
+        stem_controller.set_control_output("SShft.sy", sy0)
+        stem_controller.set_control_output("SShft.x", x0)
+        stem_controller.set_control_output("SShft.y", y0)
 
-        instrument.set_control_output("SShft.sy", sy0 + ds)
-        x2 = instrument.get_control_output("SShft.x")
-        y2 = instrument.get_control_output("SShft.y")
-        instrument.set_control_output("SShft.sy", sy0)
+        stem_controller.set_control_output("SShft.sy", sy0 + ds)
+        x2 = stem_controller.get_control_output("SShft.x")
+        y2 = stem_controller.get_control_output("SShft.y")
+        stem_controller.set_control_output("SShft.sy", sy0)
 
         dx_from_sy = x2 - x0
         dy_from_sy = y2 - y0
@@ -191,50 +192,41 @@ class OverviewSamplePanelHandler(Declarative.Handler):
         return mat
 
     def acquisition(self,
-                    instrument: stem_controller_module.STEMController,
+                    stem_controller: stem_controller_module.STEMController,
                     camera: camera_base.CameraHardwareSource,
                     defocus: float,
-                    target_width_m: tuple[float | int, float | int], timer: bool = False,
-                    reduce: float = 1.0) -> (
-    tuple[npt.NDArray[numpy.float32], int, float]  # timer=True
-    | tuple[
-        npt.NDArray[numpy.float32],
-        tuple[tuple[int, int], tuple[int, int]],
-        float,
-        float,
-        float,  # total_image_height
-      ]  # timer=False
-    | tuple[int, float]  # cancel path in timer mode
-    | None  # cancel path in non-timer mode
-):
+                    target_width_um: tuple[float | int, float | int], timer: bool = False,
+                    reduce: float = 1.0) -> (tuple[npt.NDArray[numpy.float64], int, float] |
+                                             tuple[npt.NDArray[numpy.float64], tuple[tuple[int, int], tuple[int, int]], float, float, float, float, float] |
+                                             tuple[int, float] |None):
         counter = 0
         self._cancel_requested = False
         self._is_running = True
         self.cancel_enabled.value = True
 
-        try:
-            tv_pixel_angle_rad = float(instrument.get_control_output("TVPixelAngle"))
-        except Exception:
-            tv_pixel_angle_rad = None
+        success, tv_pixel_angle_rad = stem_controller.TryGetVal("TVPixelAngle")
 
-        if tv_pixel_angle_rad is not None:
+        if success:
             shift_x_control_name = "SShft.sx"
             shift_y_control_name = "SShft.sy"
+            matrix = self.find_matrix()
 
         else:
             shift_x_control_name = "stage_position_m.x"
             shift_y_control_name = "stage_position_m.y"
+            matrix = None
 
             frame = camera.grab_next_to_start()[0]
             assert frame is not None
             tv_pixel_angle_rad = float(frame.dimensional_calibrations[0].scale)
 
-        # grab stage original location
-        sx_um = instrument.get_control_output(shift_x_control_name)
-        sy_um = instrument.get_control_output(shift_y_control_name)
-        df_original = instrument.get_control_output("C10")
+        # grab stage original location and original defocus
+        sx_um = stem_controller.get_control_output(shift_x_control_name)
+        sy_um = stem_controller.get_control_output(shift_y_control_name)
+        df_original = stem_controller.get_control_output("C10")
 
-        instrument.set_control_output("C10", defocus)
+        assert tv_pixel_angle_rad is not None
+        stem_controller.set_control_output("C10", defocus)
         pixel_size_nm = abs(defocus) * math.tan(tv_pixel_angle_rad)
 
         image_size = camera.get_expected_dimensions(camera.get_current_frame_parameters())
@@ -249,13 +241,13 @@ class OverviewSamplePanelHandler(Declarative.Handler):
 
         sub_area = (master_sub_area[0][0] // reduce, master_sub_area[0][1] // reduce), (master_sub_area[1][0] // reduce, master_sub_area[1][1] // reduce)
 
-        frames_needed_width = math.ceil(target_width_m[0] * 1e-6 / sub_area_shift_um)
-        frames_needed_height = math.ceil(target_width_m[1] * 1e-6 / sub_area_shift_um)
+        frames_needed_width = math.ceil(target_width_um[0] * 1e-6 / sub_area_shift_um)
+        frames_needed_height = math.ceil(target_width_um[1] * 1e-6 / sub_area_shift_um)
         size = (frames_needed_width, frames_needed_height)
         total_image_height = size[1] * image_width_um
         total_images = frames_needed_width * frames_needed_height
 
-        master_data = typing.cast(npt.NDArray[numpy.float32], numpy.empty((sub_area[1][0] * size[0], sub_area[1][1] * size[1]), dtype=numpy.float32))
+        master_data = numpy.empty((sub_area[1][0] * size[0], sub_area[1][1] * size[1]))
         if not timer:
             self._append_output_threadsafe(f"Stage starting position: {sx_um * 1e6, sy_um * 1e6} um")
             self._append_output_threadsafe(f"Pixel size: {(pixel_size_nm * 1e9):.3f} nm")
@@ -287,7 +279,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
                         self.cancel_enabled.value = False
                         return None if not timer else (0, 0.0)
 
-                    if shift_x_control_name == "stage_position_m.x":
+                    if matrix is None or numpy.linalg.det(matrix) == 0 or len(matrix) == 0:
                         delta_x_um = - sub_area_shift_um * (column - size[1] // 2)
                         delta_y_um = - sub_area_shift_um * (row - size[0] // 2)
                     else:
@@ -311,8 +303,8 @@ class OverviewSamplePanelHandler(Declarative.Handler):
                         attempts += 1
                         try:
                             tolerance_factor = 0.0001
-                            instrument.set_control_output(shift_x_control_name, sx_um - delta_x_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
-                            instrument.set_control_output(shift_y_control_name, sy_um - delta_y_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
+                            stem_controller.set_control_output(shift_x_control_name, sx_um - delta_x_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
+                            stem_controller.set_control_output(shift_y_control_name, sy_um - delta_y_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
                         except TimeoutError:
                             self._append_output_threadsafe(f"Timeout row= {row} column= {column}")
                             continue
@@ -330,8 +322,8 @@ class OverviewSamplePanelHandler(Declarative.Handler):
                         attempts += 1
                         try:
                             tolerance_factor = 0.0001
-                            instrument.set_control_output(shift_x_control_name, sx_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
-                            instrument.set_control_output(shift_y_control_name, sy_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
+                            stem_controller.set_control_output(shift_x_control_name, sx_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
+                            stem_controller.set_control_output(shift_y_control_name, sy_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
                         except TimeoutError:
                             self._append_output_threadsafe(f"Timeout row= {row} column= {column}")
                             continue
@@ -351,9 +343,9 @@ class OverviewSamplePanelHandler(Declarative.Handler):
             time_total = t2 - t1
         finally:
             # restore stage to original location
-            instrument.set_control_output(shift_x_control_name, sx_um)
-            instrument.set_control_output(shift_y_control_name, sy_um)
-            instrument.set_control_output("C10", df_original)
+            stem_controller.set_control_output(shift_x_control_name, sx_um)
+            stem_controller.set_control_output(shift_y_control_name, sy_um)
+            stem_controller.set_control_output("C10", df_original)
             self._set_progress_threadsafe(0, 100, "Progress:\n Idle")
 
         if timer:
@@ -361,7 +353,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
             return master_data, total_images, time_total
         else:
             self.cancel_enabled.value = False
-            return master_data, sub_area, sub_area_shift_um, pixel_size_nm, total_image_height
+            return master_data, sub_area, sub_area_shift_um, pixel_size_nm, total_image_height, sx_um, sy_um
 
     def on_estimate_time_clicked(self, widget: typing.Any) -> None:
         try:
@@ -382,11 +374,11 @@ class OverviewSamplePanelHandler(Declarative.Handler):
         if abs(defocus_nm * 1e9) < 1000 or abs(defocus_nm * 1e9) > 500000:
             self._append_output("Warning: Requested defocus is outside of sensible limit")
             return
-        instrument = self.instrument
+        stem_controller = self.stem_controller
         camera = self.camera
 
         target_width_um = (width_um, height_um)
-        result = self.acquisition(instrument, camera, defocus_nm, target_width_um, timer=True, reduce=reduce)
+        result = self.acquisition(stem_controller, camera, defocus_nm, target_width_um, timer=True, reduce=reduce)
         if result is None or len(result) != 3:
             return
         master_data, total_images, t_total = result
@@ -404,7 +396,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
 
     async def _run_acquisition_async(
         self,
-        instrument: stem_controller_module.STEMController,
+        stem_controller: stem_controller_module.STEMController,
         camera: camera_base.CameraHardwareSource,
         defocus_nm: float,
         target_width_um: tuple[int, int],
@@ -415,13 +407,13 @@ class OverviewSamplePanelHandler(Declarative.Handler):
         self._append_output_threadsafe("Starting acquisition...\n")
         try:
             result = await loop.run_in_executor(
-                None, self.acquisition, instrument, camera, defocus_nm, target_width_um, False, reduce
+                None, self.acquisition, stem_controller, camera, defocus_nm, target_width_um, False, reduce
             )
-            if result is None or len(result) != 5:
+            if result is None or len(result) != 7:
                 self._set_progress(0, 100, "Progress:\nIdle")
                 return
 
-            master_data, sub_area, sub_area_shift_m, pixel_size_m, total_image_height = result
+            master_data, sub_area, sub_area_shift_m, pixel_size_m, total_image_height, sx_um, sy_um = result
         except Exception as e:
             self._append_output(f"Acquisition failed: {e!r}")
             self.cancel_enabled.value = False
@@ -446,11 +438,43 @@ class OverviewSamplePanelHandler(Declarative.Handler):
 
             self._append_output("Image properties:")
             self._append_output_threadsafe(f"Total image height: {total_image_height * 1e3} mm")
-            self._append_output(f"x offset: {x_scale_um} um")
-            self._append_output(f"y offset: {y_scale_um} um")
+            self._append_output_threadsafe(f"Original stage coordinates: {sx_um * 1e6, sy_um * 1e6} um")
+
+            data_array = numpy.array(xdata)
+            data_uint8 = ((data_array - data_array.min()) / (data_array.max() - data_array.min()) * 255).astype(numpy.uint8)
+
+            img = Image.fromarray(data_uint8)
+            export_path = Path(r"C:\Users\Elizabeth.Wylie\Pictures\overview-scan.jpg")
+            if not export_path.parent.exists():
+                export_path.parent.mkdir(parents=True, exist_ok=True)
+
+            background = img.save(export_path)
+
+
         except Exception as e:
             self._append_output(f"Failed to publish result: {e!r}")
             self.cancel_enabled.value = False
+            return
+
+        try:
+            result = stem_controller._get_rest_api("/exchange?property=CartridgeInStage")
+            if result.is_valid:
+                cartridge_string = result.value
+                self._append_output_threadsafe(f"Cartridge in stage: {cartridge_string}")
+
+                # Set the values on the cartridge
+                stem_controller._put_rest_api("/exchange/cartridges/" + str(cartridge_string) + "/ImageScaleRad_m", content=total_image_height)
+                stem_controller._put_rest_api("/exchange/cartridges/" + str(cartridge_string) + "/ImageOffsetX_px", content=sx_um/pixel_size_m)
+                stem_controller._put_rest_api("/exchange/cartridges/" + str(cartridge_string) + "/ImageOffsetY_px", content=sy_um/pixel_size_m)
+                stem_controller._put_rest_api("/exchange/cartridges/" + str(cartridge_string) + "/ImageFile", content=background)
+            else:
+                self._append_output_threadsafe(f"Failed to get CartridgeInStage: {result.exception}")
+                return
+
+        except Exception as e:
+            self._append_output(f"Failed to update cartridge data: {e!r}")
+            self.cancel_enabled.value = False
+            return
 
     def on_perform_acquisition_clicked(self, widget: typing.Any) -> None:
         try:
@@ -467,7 +491,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
         if width_um >= 1000 or height_um >= 1000:
             self._append_output("Warning: Requested scan size is outside of sensible limit")
             return
-        if abs(defocus_nm * 1e9) < 1000 or abs(defocus_nm * 1e9) > 500000:
+        if abs(defocus_nm * 1e9) < 1000 or abs(defocus_nm * 1e9) > 200000:
             self._append_output("Warning: Requested defocus is outside of sensible limit")
             return
 
@@ -475,12 +499,12 @@ class OverviewSamplePanelHandler(Declarative.Handler):
             self._append_output("Acquisition already running.")
             return
 
-        instrument = self.instrument
+        stem_controller = self.stem_controller
         camera = self.camera
         target_width_um = (width_um, height_um)
 
         self._acq_task = self._event_loop.create_task(
-            self._run_acquisition_async(instrument, camera, defocus_nm, target_width_um, reduce)
+            self._run_acquisition_async(stem_controller, camera, defocus_nm, target_width_um, reduce)
         )
         self.cancel_enabled.value = False
 # ---------------------------------------------------------------------------
@@ -531,4 +555,3 @@ class OverviewScanPanelExtension:
 
     def close(self) -> None:
         pass
-
