@@ -516,7 +516,7 @@ class OverviewScanPanel(Panel.Panel):
 class OverviewScanPanelExtension:
 
     # required for Swift to recognize this as an extension class.
-    extension_id = "sample.panel"
+    extension_id = "overview-scan.panel"
 
     def __init__(self, api_broker: typing.Any) -> None:
         Registry.register_component(OverviewScanPanelUI(), {"overview-scan-panel"})
