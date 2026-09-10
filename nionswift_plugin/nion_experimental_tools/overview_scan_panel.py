@@ -1,13 +1,13 @@
+import typing
+
 import asyncio
 import gettext
 import math
-import time
-import typing
-from pathlib import Path
-
 import numpy
 import numpy.typing as npt
+from pathlib import Path
 from PIL import Image
+import time
 
 from nion.instrumentation import camera_base
 from nion.instrumentation import stem_controller as stem_controller_module
@@ -38,7 +38,6 @@ class OverviewScanPanelUI:
 
 
 class OverviewSamplePanelHandler(Declarative.Handler):
-    """Declarative handler for the Sample docked panel."""
 
     def __init__(
             self,
@@ -83,46 +82,23 @@ class OverviewSamplePanelHandler(Declarative.Handler):
     def _build_ui() -> typing.Mapping[str, typing.Any]:
         u = Declarative.DeclarativeUI()
         title = u.create_label(text="Overview Scan", font="bold")
-        time_button = u.create_push_button(
-            text="Estimate scan size and duration",
-            on_clicked="on_estimate_time_clicked"
-        )
-        acq_button = u.create_push_button(
-            text="Scan",
-            on_clicked="on_perform_acquisition_clicked"
-        )
+        time_button = u.create_push_button(text="Estimate scan size and duration", on_clicked="handle_estimate_time_clicked")
+        acq_button = u.create_push_button(text="Scan", on_clicked="handle_perform_acquisition_clicked")
         properties_label = u.create_label(text="Desired properties of image:")
         width_label = u.create_label(text="Width (um):")
         width_field = u.create_line_edit(text="@binding(width_value)", editable=True)
-
         height_label = u.create_label(text="Height (um):")
         height_field = u.create_line_edit(text="@binding(height_value)", editable=True)
-
         defocus_label = u.create_label(text="Defocus (nm):")
         defocus = u.create_line_edit(text="@binding(defocus)", editable=True)
-
         reduce_label = u.create_label(text="Binning:")
         reduce_val = u.create_line_edit(text="@binding(binning)", editable=True)
-
         output_label = u.create_label(text="Output:")
-        output_box = u.create_text_edit(
-            text="@binding(output_text)",
-            editable=False,
-            height=200
-        )
+        output_box = u.create_text_edit(text="@binding(output_text)", editable=False, height=200)
         progress_label = u.create_label(text="@binding(progress_text)")
-        progress_bar = u.create_progress_bar(
-            value="@binding(progress_value)",
-            minimum=0,
-            maximum=100,
-            width=500
-        )
-        cancel_button = u.create_push_button(
-            text="Cancel",
-            on_clicked="on_cancel_acquisition_clicked",
-            enabled="@binding(cancel_enabled.value)"
-
-        )
+        progress_bar = u.create_progress_bar(value="@binding(progress_value)", minimum=0, maximum=100, width=500)
+        cancel_button = u.create_push_button(text="Cancel", on_clicked="handle_cancel_acquisition_clicked", enabled="@binding(cancel_enabled.value)")
+        clear_button = u.create_push_button(text="Clear minimap", on_clicked="handle_clear_minimap_clicked")
 
         return typing.cast(typing.Mapping[str, typing.Any], u.create_column(
             title,
@@ -136,7 +112,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
             progress_label,
             progress_bar,
             u.create_spacing(8),
-            cancel_button,
+            u.create_row(cancel_button, u.create_spacing(4),clear_button),
             u.create_spacing(8),
             output_label,
             output_box,
@@ -152,7 +128,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
     def _append_output_threadsafe(self, message: str) -> None:
         self._event_loop.call_soon_threadsafe(self._append_output, message)
 
-    def on_cancel_acquisition_clicked(self, widget: typing.Any) -> None:
+    def handle_cancel_acquisition_clicked(self, widget: typing.Any) -> None:
         if self._is_running:
             self._cancel_requested = True
             self._set_progress_threadsafe(self.progress_value, 100, "Cancel requested...")
@@ -227,18 +203,16 @@ class OverviewSamplePanelHandler(Declarative.Handler):
 
         assert tv_pixel_angle_rad is not None
         stem_controller.set_control_output("C10", defocus)
-        pixel_size_nm = abs(defocus) * math.tan(tv_pixel_angle_rad)
 
+        pixel_size_nm = abs(defocus) * math.tan(tv_pixel_angle_rad)
         image_size = camera.get_expected_dimensions(camera.get_current_frame_parameters())
         image_width_um = abs(defocus) * math.sin(tv_pixel_angle_rad * image_size[0])
 
         master_sub_area_size = image_size[0] // 2, image_size[1] // 2
         master_sub_area = (image_size[0] // 2 - master_sub_area_size[0] // 2, image_size[1] // 2 - master_sub_area_size[1] // 2), master_sub_area_size
-
         reduce = max(1, int(reduce))
 
         sub_area_shift_um = image_width_um * (master_sub_area[1][0] / image_size[0])
-
         sub_area = (master_sub_area[0][0] // reduce, master_sub_area[0][1] // reduce), (master_sub_area[1][0] // reduce, master_sub_area[1][1] // reduce)
 
         frames_needed_width = math.ceil(target_width_um[0] * 1e-6 / sub_area_shift_um)
@@ -248,6 +222,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
         total_images = frames_needed_width * frames_needed_height
 
         master_data = numpy.empty((sub_area[1][0] * size[0], sub_area[1][1] * size[1]))
+
         if not timer:
             self._append_output_threadsafe(f"Stage starting position: {sx_um * 1e6, sy_um * 1e6} um")
             self._append_output_threadsafe(f"Pixel size: {(pixel_size_nm * 1e9):.3f} nm")
@@ -354,7 +329,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
             self.cancel_enabled.value = False
             return master_data, sub_area, sub_area_shift_um, pixel_size_nm, total_image_height, sx_um, sy_um
 
-    def on_estimate_time_clicked(self, widget: typing.Any) -> None:
+    def handle_estimate_time_clicked(self, widget: typing.Any) -> None:
         try:
             width_um = int(self.width_value)
             height_um = int(self.height_value)
@@ -440,9 +415,14 @@ class OverviewSamplePanelHandler(Declarative.Handler):
             self._append_output_threadsafe(f"Original stage coordinates: {sx_um * 1e6, sy_um * 1e6} um")
 
             data_array = numpy.array(xdata)
-            data_uint8 = ((data_array - data_array.min()) / (data_array.max() - data_array.min()) * 255).astype(numpy.uint8)
+            data_min = float(numpy.min(data_array))
+            data_max = float(numpy.max(data_array))
+            data_range = data_max - data_min
+
+            data_uint8 = ((data_array - data_min/ data_range * 255).astype(numpy.uint8))
 
             img = Image.fromarray(data_uint8)
+            #export_path = Path(r"C:\Users\Elizabeth.Wylie\Pictures\overview-scan.jpg")
             export_path = Path(r"C:\AS2\AS2User\Pictures\overview-scan.jpg")
             if not export_path.parent.exists():
                 export_path.parent.mkdir(parents=True, exist_ok=True)
@@ -476,7 +456,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
             self.cancel_enabled.value = False
             return
 
-    def on_perform_acquisition_clicked(self, widget: typing.Any) -> None:
+    def handle_perform_acquisition_clicked(self, widget: typing.Any) -> None:
         try:
             width_um = int(self.width_value)
             height_um = int(self.height_value)
@@ -507,13 +487,23 @@ class OverviewSamplePanelHandler(Declarative.Handler):
             self._run_acquisition_async(stem_controller, camera, defocus_nm, target_width_um, reduce)
         )
         self.cancel_enabled.value = False
-# ---------------------------------------------------------------------------
-# Swift Panel wrapper
-# ---------------------------------------------------------------------------
+
+    def handle_clear_minimap_clicked(self, widget: typing.Any) -> None:
+        stem_controller = self.stem_controller
+        try:
+            cartridge_result = stem_controller._get_rest_api("/exchange?property=CartridgeInStage")
+            if cartridge_result.is_valid:
+                cartridge_string = cartridge_result.value
+                properties: JSONDict = {"ImageScaleRad_m": 0.0, "ImageOffsetX_px": 0.0, "ImageOffsetY_px": 0.0, "ImageFile": ""}
+                stem_controller._put_rest_api(f"/exchange/cartridges/{cartridge_string}", content=properties)
+                self._append_output_threadsafe("Minimap cleared.")
+            else:
+                self._append_output_threadsafe(f"Failed to get CartridgeInStage: {cartridge_result.exception}")
+        except Exception as e:
+            self._append_output(f"Failed to clear minimap data: {e!r}")
 
 
 class OverviewScanPanel(Panel.Panel):
-    """Swift panel class instantiated by the Workspace panel manager."""
 
     def __init__(
         self,
@@ -539,7 +529,6 @@ class OverviewScanPanel(Panel.Panel):
 
 class OverviewScanPanelExtension:
 
-    # required for Swift to recognize this as an extension class.
     extension_id = "overview-scan.panel"
 
     def __init__(self, api_broker: typing.Any) -> None:
