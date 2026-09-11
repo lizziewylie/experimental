@@ -208,7 +208,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
         image_size = camera.get_expected_dimensions(camera.get_current_frame_parameters())
         image_width_um = abs(defocus) * math.sin(tv_pixel_angle_rad * image_size[0])
 
-        master_sub_area_size = image_size[0] // 2, image_size[1] // 2
+        master_sub_area_size = image_size[0], image_size[1]
         master_sub_area = (image_size[0] // 2 - master_sub_area_size[0] // 2, image_size[1] // 2 - master_sub_area_size[1] // 2), master_sub_area_size
         reduce = max(1, int(reduce))
 
@@ -286,22 +286,6 @@ class OverviewSamplePanelHandler(Declarative.Handler):
 
                     supradata = camera.grab_next_to_start()[0]
                     assert supradata is not None
-                    # set both values
-                    attempts = 0
-                    while attempts < 4:
-                        if self._cancel_requested:
-                            self._append_output_threadsafe("Acquisition Cancelled.")
-                            self.cancel_enabled.value = False
-                            return None if not timer else (0, 0.0)
-                        attempts += 1
-                        try:
-                            tolerance_factor = 0.0001
-                            stem_controller.set_control_output(shift_x_control_name, sx_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
-                            stem_controller.set_control_output(shift_y_control_name, sy_um, {"confirm": True, "confirm_tolerance_factor": tolerance_factor})
-                        except TimeoutError:
-                            self._append_output_threadsafe(f"Timeout row= {row} column= {column}")
-                            continue
-                        break
                     data = supradata.data[master_sub_area[0][0]:master_sub_area[0][0] + master_sub_area[1][0]:reduce, master_sub_area[0][1]:master_sub_area[0][1] + master_sub_area[1][1]:reduce]
                     slice_row = row
                     slice_column = column
@@ -312,7 +296,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
                     # inside loop after counter increment or frame write
                     if not timer:
                         pct = int(100 * counter / total_images)
-                        self._set_progress_threadsafe(pct, total_images, f"Progress:\nAcquiring {counter}/{total_images} frames")
+                        self._set_progress_threadsafe(pct, total_images, f"Progress:\nAcquiring frame {counter} of {total_images}")
             t2 = time.time()
             time_total = t2 - t1
         finally:
@@ -471,7 +455,7 @@ class OverviewSamplePanelHandler(Declarative.Handler):
         if width_um >= 1000 or height_um >= 1000:
             self._append_output("Warning: Requested scan size is outside of sensible limit")
             return
-        if abs(defocus_nm * 1e9) < 1000 or abs(defocus_nm * 1e9) > 200000:
+        if abs(defocus_nm * 1e9) < 1000 or abs(defocus_nm * 1e9) > 500000:
             self._append_output("Warning: Requested defocus is outside of sensible limit")
             return
 
