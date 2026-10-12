@@ -14,7 +14,6 @@ from . import MultiDimensionalProcessing
 from . import IESquarePlot
 from . import FindLocalMaxima
 from . import overview_scan_panel
-
 from . import ExperimentalAxesPlotter
 
 _computation_classes = [

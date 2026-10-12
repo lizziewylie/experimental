@@ -26,7 +26,7 @@ from nion.utils import Registry
 
 _ = gettext.gettext
 JSONType = stem_controller_module.JSONType
-max_size = 32000  # this is the maximum size of the final image in pixels that can be pushed to the sample navigation window. Placeholder value at the moment because something weird is happening with AS2 where the max possible size is decreasing
+max_size = 20000  # this is the maximum size of the final image in pixels that can be pushed to the sample navigation window. Placeholder value at the moment because something weird is happening with AS2 where the max possible size is decreasing
 
 
 @dataclasses.dataclass
